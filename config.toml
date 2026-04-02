@@ -7,7 +7,7 @@ header_byte = 256
 variable_header_byte = 2890 
 data_header_byte = 13452 
 data_skip_byte = 12
-footer_byte = 0 #28
+footer_byte = 28
 
 # 1レコード = 4 * i32 = 16 byte
 values_per_record = 4
