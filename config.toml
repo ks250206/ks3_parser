@@ -1,26 +1,20 @@
-input_path = "Test0006.ks2"
+input_path = "Test0029.ks2"
 output_dir = "out"
 output_file_name = "result.csv"
 auto_detect_offsets = true
-
 header_byte = 256
-variable_header_byte = 2890 
-data_header_byte = 13452 
+variable_header_byte = 2890
+data_header_byte = 13452
 data_skip_byte = 12
-footer_byte = 28
-
-# 1レコード = 4 * i32 = 16 byte
+footer_byte = 0
 values_per_record = 4
-
-# i32 のエンディアン
 endianness = "little"
-
-ADConverterScale = 2099200002
-ADRangeCoefficient = 5000
-ADCoefficient = 256
+ADConverterScale = 2099200002.0
+ADRangeCoefficient = 5000.0
+ADCoefficient = 256.0
 
 [coefficient]
 CH1 = 1.05
-CH2 = 1.13
+CH2 = 1.05
 CH3 = 1.04
 CH4 = 1.12
