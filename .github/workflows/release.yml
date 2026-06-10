@@ -20,15 +20,15 @@ jobs:
           - os: macos-14
             label: macOS Apple Silicon
             archive_suffix: apple-silicon-mac
-            binary_name: ks2_parser
+            binary_name: ks3_parser
           - os: macos-13
             label: macOS Intel
             archive_suffix: intel-mac
-            binary_name: ks2_parser
+            binary_name: ks3_parser
           - os: windows-latest
             label: Windows x64
             archive_suffix: windows-x64
-            binary_name: ks2_parser.exe
+            binary_name: ks3_parser.exe
 
     steps:
       - name: Checkout
@@ -42,7 +42,7 @@ jobs:
           else
             version="manual-${GITHUB_RUN_NUMBER}"
           fi
-          echo "ARCHIVE_NAME=ks2_parser-${version}-${{ matrix.archive_suffix }}.zip" >> "${GITHUB_ENV}"
+          echo "ARCHIVE_NAME=ks3_parser-${version}-${{ matrix.archive_suffix }}.zip" >> "${GITHUB_ENV}"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -53,20 +53,20 @@ jobs:
       - name: Prepare archive directory
         shell: bash
         run: |
-          mkdir -p dist/ks2_parser
-          cp "target/release/${{ matrix.binary_name }}" dist/ks2_parser/
-          cp config.toml dist/ks2_parser/
+          mkdir -p dist/ks3_parser
+          cp "target/release/${{ matrix.binary_name }}" dist/ks3_parser/
+          cp config.toml dist/ks3_parser/
 
       - name: Create zip archive on macOS
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          ditto -c -k --sequesterRsrc --keepParent dist/ks2_parser "dist/${ARCHIVE_NAME}"
+          ditto -c -k --sequesterRsrc --keepParent dist/ks3_parser "dist/${ARCHIVE_NAME}"
 
       - name: Create zip archive on Windows
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path dist/ks2_parser -DestinationPath "dist/$env:ARCHIVE_NAME" -Force
+        run: Compress-Archive -Path dist/ks3_parser -DestinationPath "dist/$env:ARCHIVE_NAME" -Force
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4

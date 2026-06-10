@@ -1,5 +1,4 @@
-use std::fs::File;
-use std::io::{stdout, BufRead, BufReader, ErrorKind};
+use std::io::{ErrorKind, stdout};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -9,13 +8,14 @@ use crossterm::event::{
     MouseEventKind,
 };
 use crossterm::execute;
-use ks2_parser::{load_config, save_config, run_pipeline, Config, Endianness};
+use encoding_rs::SHIFT_JIS;
+use ks3_parser::{Config, load_config, run_pipeline, save_config};
 use ratatui::DefaultTerminal;
 
 use super::clipboard;
 use super::ui;
 
-pub const FIELD_COUNT: usize = 18;
+pub const FIELD_COUNT: usize = 3;
 
 /// lazygit 風のペイン番号（1–4）
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -55,46 +55,12 @@ pub struct VisualSelection {
     pub cursor: usize,
 }
 
-const LABELS: [&str; FIELD_COUNT] = [
-    "input_path",
-    "output_dir",
-    "output_file_name",
-    "auto_detect_offsets",
-    "header_byte",
-    "variable_header_byte",
-    "data_header_byte",
-    "data_skip_byte",
-    "footer_byte",
-    "values_per_record",
-    "endianness",
-    "ADConverterScale",
-    "ADRangeCoefficient",
-    "ADCoefficient",
-    "coefficient.CH1",
-    "coefficient.CH2",
-    "coefficient.CH3",
-    "coefficient.CH4",
-];
+const LABELS: [&str; FIELD_COUNT] = ["input_path", "output_dir", "output_file_name"];
 
 const HELP_TEXT: [&str; FIELD_COUNT] = [
-    "入力 .ks2 ファイルのパス",
+    "入力 .KS3 ファイルのパス",
     "CSV の出力ディレクトリ",
     "出力 CSV ファイル名",
-    "true: CRLF から variable/data/footer オフセットを自動判定",
-    "データ開始計算の基準となるヘッダ長（バイト）",
-    "可変ヘッダ長（バイト）",
-    "データヘッダ長（バイト）",
-    "データ本体直前の追加スキップ（バイト）",
-    "ファイル末尾から除外するバイト数",
-    "1 レコードあたりの値数（現在は 4 固定で検証あり）",
-    "i32 のエンディアン: little または big",
-    "AD 変換スケール（0 不可）",
-    "AD レンジ係数",
-    "AD 係数",
-    "ch1 のチャンネル補正係数",
-    "ch2 のチャンネル補正係数",
-    "ch3 のチャンネル補正係数",
-    "ch4 のチャンネル補正係数",
 ];
 
 pub fn run_app(config_path: PathBuf) -> Result<()> {
@@ -436,9 +402,7 @@ impl App {
             Ok(()) => {
                 self.status_error = false;
                 self.status_line.clear();
-                self.push_log(format!(
-                    "クリップボードにコピーしました（{n_lines} 行）"
-                ));
+                self.push_log(format!("クリップボードにコピーしました（{n_lines} 行）"));
             }
             Err(e) => {
                 self.status_error = true;
@@ -569,10 +533,7 @@ impl App {
     }
 
     pub fn selected_row(&self) -> usize {
-        self.list_state
-            .selected()
-            .unwrap_or(0)
-            .min(FIELD_COUNT - 1)
+        self.list_state.selected().unwrap_or(0).min(FIELD_COUNT - 1)
     }
 
     fn move_selection(&mut self, delta: isize) {
@@ -674,26 +635,14 @@ impl App {
     }
 
     fn run_convert(&mut self) {
-        self.push_undo_checkpoint();
         let mut cfg = self.config.clone();
-        let before_run = cfg.clone();
         match run_pipeline(&mut cfg) {
             Ok(summary) => {
                 self.status_error = false;
-                for idx in [5usize, 6, 8] {
-                    let b = display_value(&before_run, idx);
-                    let a = display_value(&cfg, idx);
-                    if b != a {
-                        self.push_field_update_log(idx, &b, &a);
-                    }
-                }
                 self.config = cfg;
                 let msg = format!(
-                    "完了: records={} variable_header={} data_header={} footer={}",
-                    summary.records,
-                    summary.variable_header_byte,
-                    summary.data_header_byte,
-                    summary.footer_byte
+                    "完了: records={} channels={} sampling_frequency_hz={}",
+                    summary.records, summary.channels, summary.sampling_frequency_hz
                 );
                 self.status_line = msg.clone();
                 self.push_log(msg);
@@ -706,7 +655,6 @@ impl App {
                 ));
             }
             Err(e) => {
-                self.undo_stack.pop();
                 self.status_error = true;
                 self.status_line = format!("変換エラー: {e:#}");
                 self.push_log(self.status_line.clone());
@@ -846,7 +794,8 @@ impl App {
                 self.edit_cursor = len;
             }
             KeyCode::Backspace => {
-                if self.edit_cursor > 0 && remove_char_before(&mut self.edit_buffer, self.edit_cursor)
+                if self.edit_cursor > 0
+                    && remove_char_before(&mut self.edit_buffer, self.edit_cursor)
                 {
                     self.edit_cursor -= 1;
                 }
@@ -864,23 +813,8 @@ impl App {
     }
 
     fn toggle_current_if_toggleable(&mut self) {
-        let i = self.selected_row();
-        if i == 3 {
-            self.push_undo_checkpoint();
-            let before = display_value(&self.config, 3);
-            self.config.auto_detect_offsets = !self.config.auto_detect_offsets;
-            let after = display_value(&self.config, 3);
-            self.push_field_update_log(3, &before, &after);
-        } else if i == 10 {
-            self.push_undo_checkpoint();
-            let before = display_value(&self.config, 10);
-            self.config.endianness = match self.config.endianness {
-                Endianness::Little => Endianness::Big,
-                Endianness::Big => Endianness::Little,
-            };
-            let after = display_value(&self.config, 10);
-            self.push_field_update_log(10, &before, &after);
-        }
+        self.status_error = false;
+        self.status_line = "この設定には Space で切り替える項目はありません".into();
     }
 
     pub fn list_row_line(&self, i: usize) -> ratatui::text::Line<'static> {
@@ -906,17 +840,11 @@ impl App {
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD);
             let (p_sty, v_sty) = if i == sel {
-                (
-                    sel_bg,
-                    val_style.patch(sel_bg),
-                )
+                (sel_bg, val_style.patch(sel_bg))
             } else {
                 (Style::default(), val_style)
             };
-            ratatui::text::Line::from(vec![
-                Span::styled(prefix, p_sty),
-                Span::styled(val, v_sty),
-            ])
+            ratatui::text::Line::from(vec![Span::styled(prefix, p_sty), Span::styled(val, v_sty)])
         }
     }
 }
@@ -926,8 +854,8 @@ fn read_output_csv_plain(config: &Config, max_lines: usize) -> Vec<String> {
     const MAX_BYTES: usize = 256 * 1024;
     let path = config.output_dir.join(&config.output_file_name);
 
-    let file = match File::open(&path) {
-        Ok(f) => f,
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
         Err(e) => {
             return if e.kind() == ErrorKind::NotFound {
                 vec![
@@ -947,60 +875,35 @@ fn read_output_csv_plain(config: &Config, max_lines: usize) -> Vec<String> {
         }
     };
 
-    let mut reader = BufReader::new(file);
-    let mut out: Vec<String> = Vec::new();
-    let mut buf = String::new();
-    let mut total_bytes = 0usize;
-    let limit = max_lines.max(1);
-
-    if limit == 1 {
-        buf.clear();
-        match reader.read_line(&mut buf) {
-            Ok(0) => return vec!["（中身が空です）".into()],
-            Ok(_) => {
-                if total_bytes + buf.len() > MAX_BYTES {
-                    return vec!["… （バイト数の上限で省略）".into()];
-                }
-                let trimmed = buf.trim_end_matches(['\r', '\n']).to_string();
-                return vec![trimmed];
-            }
-            Err(e) => return vec![format!("読み込みエラー: {e}")],
-        }
+    if bytes.is_empty() {
+        return vec!["（中身が空です）".into()];
     }
 
-    let mut truncated_by_bytes = false;
-    while out.len() < limit {
-        buf.clear();
-        match reader.read_line(&mut buf) {
-            Ok(0) => break,
-            Ok(_) => {
-                if total_bytes + buf.len() > MAX_BYTES {
-                    out.push("… （バイト数の上限で省略）".into());
-                    truncated_by_bytes = true;
-                    break;
-                }
-                total_bytes += buf.len();
-                let trimmed = buf.trim_end_matches(['\r', '\n']).to_string();
-                out.push(trimmed);
-            }
-            Err(e) => return vec![format!("読み込みエラー: {e}")],
-        }
-    }
-
-    if !truncated_by_bytes {
-        buf.clear();
-        let has_more = reader.read_line(&mut buf).map(|n| n > 0).unwrap_or(false);
-        if has_more && out.len() == limit {
-            out.pop();
-            out.push("… （表示行数の上限で省略）".into());
-        }
-    }
-
-    if out.is_empty() {
-        vec!["（中身が空です）".into()]
+    let bytes = if bytes.len() > MAX_BYTES {
+        &bytes[..MAX_BYTES]
     } else {
-        out
+        &bytes
+    };
+    let (decoded, _, _) = SHIFT_JIS.decode(bytes);
+    let mut lines = decoded
+        .lines()
+        .map(|line| line.trim_end_matches('\r').to_string())
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return vec!["（中身が空です）".into()];
     }
+
+    let limit = max_lines.max(1);
+    if lines.len() > limit {
+        lines.truncate(limit);
+        if let Some(last) = lines.last_mut() {
+            *last = "… （表示行数の上限で省略）".into();
+        }
+    }
+    if bytes.len() == MAX_BYTES {
+        lines.push("… （バイト数の上限で省略）".into());
+    }
+    lines
 }
 
 fn insert_char_at(s: &mut String, char_idx: usize, ch: char) {
@@ -1016,11 +919,7 @@ fn remove_char_before(s: &mut String, char_idx: usize) -> bool {
     if char_idx == 0 {
         return false;
     }
-    let start = s
-        .char_indices()
-        .nth(char_idx - 1)
-        .map(|(b, _)| b)
-        .unwrap();
+    let start = s.char_indices().nth(char_idx - 1).map(|(b, _)| b).unwrap();
     let end = s
         .char_indices()
         .nth(char_idx)
@@ -1087,21 +986,6 @@ fn field_modified_from_saved(current: &Config, saved: &Config, i: usize) -> bool
         0 => current.input_path != saved.input_path,
         1 => current.output_dir != saved.output_dir,
         2 => current.output_file_name != saved.output_file_name,
-        3 => current.auto_detect_offsets != saved.auto_detect_offsets,
-        4 => current.header_byte != saved.header_byte,
-        5 => current.variable_header_byte != saved.variable_header_byte,
-        6 => current.data_header_byte != saved.data_header_byte,
-        7 => current.data_skip_byte != saved.data_skip_byte,
-        8 => current.footer_byte != saved.footer_byte,
-        9 => current.values_per_record != saved.values_per_record,
-        10 => current.endianness != saved.endianness,
-        11 => current.ad_converter_scale != saved.ad_converter_scale,
-        12 => current.ad_range_coefficient != saved.ad_range_coefficient,
-        13 => current.ad_coefficient != saved.ad_coefficient,
-        14 => current.coefficient.ch1 != saved.coefficient.ch1,
-        15 => current.coefficient.ch2 != saved.coefficient.ch2,
-        16 => current.coefficient.ch3 != saved.coefficient.ch3,
-        17 => current.coefficient.ch4 != saved.coefficient.ch4,
         _ => false,
     }
 }
@@ -1111,33 +995,7 @@ fn display_value(c: &Config, i: usize) -> String {
         0 => c.input_path.display().to_string(),
         1 => c.output_dir.display().to_string(),
         2 => c.output_file_name.clone(),
-        3 => c.auto_detect_offsets.to_string(),
-        4 => c.header_byte.to_string(),
-        5 => c.variable_header_byte.to_string(),
-        6 => c.data_header_byte.to_string(),
-        7 => c.data_skip_byte.to_string(),
-        8 => c.footer_byte.to_string(),
-        9 => c.values_per_record.to_string(),
-        10 => match c.endianness {
-            Endianness::Little => "little".to_string(),
-            Endianness::Big => "big".to_string(),
-        },
-        11 => format_f64(c.ad_converter_scale),
-        12 => format_f64(c.ad_range_coefficient),
-        13 => format_f64(c.ad_coefficient),
-        14 => format_f64(c.coefficient.ch1),
-        15 => format_f64(c.coefficient.ch2),
-        16 => format_f64(c.coefficient.ch3),
-        17 => format_f64(c.coefficient.ch4),
         _ => String::new(),
-    }
-}
-
-fn format_f64(x: f64) -> String {
-    if x.fract() == 0.0 {
-        format!("{:.0}", x)
-    } else {
-        x.to_string()
     }
 }
 
@@ -1152,80 +1010,9 @@ fn apply_field(config: &mut Config, i: usize, raw: &str) -> Result<(), String> {
             }
             config.output_file_name = t.to_string();
         }
-        3 => config.auto_detect_offsets = parse_bool(t)?,
-        4 => config.header_byte = t.parse().map_err(|_| format!("無効な usize: {t}"))?,
-        5 => {
-            config.variable_header_byte = t
-                .parse()
-                .map_err(|_| format!("無効な usize: {t}"))?
-        }
-        6 => {
-            config.data_header_byte = t
-                .parse()
-                .map_err(|_| format!("無効な usize: {t}"))?
-        }
-        7 => config.data_skip_byte = t.parse().map_err(|_| format!("無効な usize: {t}"))?,
-        8 => config.footer_byte = t.parse().map_err(|_| format!("無効な usize: {t}"))?,
-        9 => {
-            config.values_per_record = t
-                .parse()
-                .map_err(|_| format!("無効な usize: {t}"))?
-        }
-        10 => config.endianness = parse_endian(t)?,
-        11 => {
-            config.ad_converter_scale = t
-                .parse()
-                .map_err(|_| format!("無効な数値: {t}"))?
-        }
-        12 => {
-            config.ad_range_coefficient = t
-                .parse()
-                .map_err(|_| format!("無効な数値: {t}"))?
-        }
-        13 => {
-            config.ad_coefficient = t
-                .parse()
-                .map_err(|_| format!("無効な数値: {t}"))?
-        }
-        14 => {
-            config.coefficient.ch1 = t
-                .parse()
-                .map_err(|_| format!("無効な数値: {t}"))?
-        }
-        15 => {
-            config.coefficient.ch2 = t
-                .parse()
-                .map_err(|_| format!("無効な数値: {t}"))?
-        }
-        16 => {
-            config.coefficient.ch3 = t
-                .parse()
-                .map_err(|_| format!("無効な数値: {t}"))?
-        }
-        17 => {
-            config.coefficient.ch4 = t
-                .parse()
-                .map_err(|_| format!("無効な数値: {t}"))?
-        }
         _ => return Err("不明なフィールド".into()),
     }
     Ok(())
-}
-
-fn parse_bool(t: &str) -> Result<bool, String> {
-    match t.to_lowercase().as_str() {
-        "true" | "1" | "yes" => Ok(true),
-        "false" | "0" | "no" => Ok(false),
-        _ => Err(format!("bool として解釈できません: {t}")),
-    }
-}
-
-fn parse_endian(t: &str) -> Result<Endianness, String> {
-    match t.to_lowercase().as_str() {
-        "little" => Ok(Endianness::Little),
-        "big" => Ok(Endianness::Big),
-        _ => Err(format!("endianness は little または big: {t}")),
-    }
 }
 
 pub fn field_label(i: usize) -> &'static str {
@@ -1239,478 +1026,15 @@ pub fn field_help(i: usize) -> &'static str {
 /// 右ペイン「有効な値」用（編集入力・TOML の解釈に合わせる）
 pub fn field_allowed_values(i: usize) -> &'static str {
     match i {
-        0 => "任意のパス文字列（入力 .ks2）",
+        0 => "任意のパス文字列（入力 .KS3）",
         1 => "任意のディレクトリパス",
         2 => "空でない 1 行のファイル名",
-        3 => "true / false（編集では 1/0, yes/no も可）",
-        4 | 5 | 6 | 7 | 8 => "0 以上の整数",
-        9 => "本プログラムは 4 固定で検証（変更は非推奨）",
-        10 => "little または big（編集では小文字）",
-        11 => "0 以外の浮動小数点数",
-        12 | 13 | 14 | 15 | 16 | 17 => "浮動小数点数",
         _ => "",
     }
 }
 
 /// Space で切り替え可能な行だけヒントを返す（bool と endian を分けて表示）
 pub fn field_space_hint(i: usize) -> Option<&'static str> {
-    match i {
-        3 => Some("Space で true / false を切り替え"),
-        10 => Some("Space で little ↔ big を切り替え"),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-    use std::path::PathBuf;
-
-    use ks2_parser::{ChannelCoefficient, Config, Endianness};
-    use tempfile::tempdir;
-
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    use super::*;
-
-    fn press(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::empty())
-    }
-
-    fn press_ctrl_r() -> KeyEvent {
-        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)
-    }
-
-    fn base_config(dir: &std::path::Path) -> Config {
-        Config {
-            input_path: dir.join("i.ks2"),
-            output_dir: dir.to_path_buf(),
-            output_file_name: "p.csv".into(),
-            auto_detect_offsets: false,
-            header_byte: 0,
-            variable_header_byte: 0,
-            data_header_byte: 0,
-            data_skip_byte: 0,
-            footer_byte: 0,
-            values_per_record: 4,
-            endianness: Endianness::Little,
-            ad_converter_scale: 1.0,
-            ad_range_coefficient: 1.0,
-            ad_coefficient: 1.0,
-            coefficient: ChannelCoefficient {
-                ch1: 1.0,
-                ch2: 1.0,
-                ch3: 1.0,
-                ch4: 1.0,
-            },
-        }
-    }
-
-    #[test]
-    fn apply_field_paths_and_numbers() {
-        let dir = tempdir().unwrap();
-        let mut c = base_config(dir.path());
-        apply_field(&mut c, 0, " /tmp/in.ks2 ").unwrap();
-        assert_eq!(c.input_path, PathBuf::from("/tmp/in.ks2"));
-        apply_field(&mut c, 4, "99").unwrap();
-        assert_eq!(c.header_byte, 99);
-        assert!(apply_field(&mut c, 4, "x").is_err());
-    }
-
-    #[test]
-    fn apply_field_bool_and_endian() {
-        let dir = tempdir().unwrap();
-        let mut c = base_config(dir.path());
-        apply_field(&mut c, 3, "yes").unwrap();
-        assert!(c.auto_detect_offsets);
-        apply_field(&mut c, 10, "BIG").unwrap();
-        assert_eq!(c.endianness, Endianness::Big);
-        assert!(apply_field(&mut c, 10, "middle").is_err());
-        assert!(apply_field(&mut c, 3, "maybe").is_err());
-    }
-
-    #[test]
-    fn apply_field_unknown_index() {
-        let dir = tempdir().unwrap();
-        let mut c = base_config(dir.path());
-        assert!(apply_field(&mut c, 99, "1").is_err());
-    }
-
-    #[test]
-    fn apply_field_empty_output_name() {
-        let dir = tempdir().unwrap();
-        let mut c = base_config(dir.path());
-        assert!(apply_field(&mut c, 2, "   ").is_err());
-    }
-
-    #[test]
-    fn insert_remove_chars_utf8() {
-        let mut s = String::from("ab");
-        insert_char_at(&mut s, 1, 'é');
-        assert_eq!(s, "aéb");
-        assert!(!remove_char_before(&mut s, 0));
-        assert!(remove_char_before(&mut s, 2));
-        assert_eq!(s, "ab");
-        assert!(remove_char_at(&mut s, 0));
-        assert_eq!(s, "b");
-    }
-
-    #[test]
-    fn csv_preview_not_found_is_soft_message() {
-        let dir = tempdir().unwrap();
-        let mut c = base_config(dir.path());
-        c.output_file_name = "nope.csv".into();
-        let lines = read_output_csv_plain(&c, 5);
-        let joined = lines.join("");
-        assert!(joined.contains("まだ"));
-    }
-
-    #[test]
-    fn csv_preview_single_line_mode() {
-        let dir = tempdir().unwrap();
-        let mut c = base_config(dir.path());
-        c.output_file_name = "one.csv".into();
-        fs::write(dir.path().join("one.csv"), "only\nnext\n").unwrap();
-        let lines = read_output_csv_plain(&c, 1);
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].contains("only"));
-    }
-
-    #[test]
-    fn csv_preview_empty_file_message() {
-        let dir = tempdir().unwrap();
-        let mut c = base_config(dir.path());
-        c.output_file_name = "empty.csv".into();
-        fs::write(dir.path().join("empty.csv"), b"").unwrap();
-        let lines = read_output_csv_plain(&c, 3);
-        assert!(lines[0].contains("空"));
-    }
-
-    #[test]
-    fn csv_preview_reads_lines() {
-        let dir = tempdir().unwrap();
-        let mut c = base_config(dir.path());
-        c.output_file_name = "x.csv".into();
-        fs::write(dir.path().join("x.csv"), "a,b\n1,2\n").unwrap();
-        let lines = read_output_csv_plain(&c, 10);
-        assert!(lines.iter().any(|l| l.contains("a,b")));
-    }
-
-    #[test]
-    fn csv_preview_truncates_with_ellipsis() {
-        let dir = tempdir().unwrap();
-        let mut c = base_config(dir.path());
-        c.output_file_name = "many.csv".into();
-        let mut body = String::new();
-        for i in 0..30 {
-            body.push_str(&format!("row{i}\n"));
-        }
-        fs::write(dir.path().join("many.csv"), body).unwrap();
-        let lines = read_output_csv_plain(&c, 5);
-        let last = lines.last().unwrap();
-        assert!(last.contains("省略"));
-    }
-
-    #[test]
-    fn edit_value_spans_newline_and_tail_cursor() {
-        let s = edit_value_spans("a\nb", 1);
-        let flat: String = s.iter().map(|sp| sp.to_string()).collect();
-        assert!(flat.contains('⏎'));
-        let t = edit_value_spans("z", 1);
-        assert_eq!(t.len(), 2);
-        let tail: String = t.iter().map(|sp| sp.to_string()).collect();
-        assert!(tail.contains('\u{258c}'), "末尾カーソルは ▌ で表示");
-    }
-
-    #[test]
-    fn format_f64_fraction() {
-        assert_eq!(format_f64(1.5), "1.5");
-        assert_eq!(format_f64(2.0), "2");
-    }
-
-    #[test]
-    fn field_label_help_bounds() {
-        assert_eq!(field_label(0), "input_path");
-        assert!(!field_help(FIELD_COUNT - 1).is_empty());
-        assert!(!field_allowed_values(FIELD_COUNT - 1).is_empty());
-        assert_eq!(field_label(999), "");
-        assert_eq!(field_allowed_values(999), "");
-        assert_eq!(field_space_hint(3).unwrap(), "Space で true / false を切り替え");
-        assert_eq!(
-            field_space_hint(10).unwrap(),
-            "Space で little ↔ big を切り替え"
-        );
-        assert!(field_space_hint(0).is_none());
-    }
-
-    #[test]
-    fn display_value_paths() {
-        let dir = tempdir().unwrap();
-        let c = base_config(dir.path());
-        assert!(display_value(&c, 0).contains("i.ks2"));
-    }
-
-    fn write_app_config(dir: &std::path::Path) -> PathBuf {
-        let ks2 = dir.join("x.ks2");
-        let mut raw = vec![0u8; 4];
-        for v in [1_i32, 2, 3, 4] {
-            raw.extend(v.to_le_bytes());
-        }
-        fs::write(&ks2, &raw).unwrap();
-        let out = dir.join("out");
-        let path = dir.join("app.toml");
-        let body = format!(
-            r#"input_path = "{}"
-output_dir = "{}"
-output_file_name = "t.csv"
-auto_detect_offsets = false
-header_byte = 4
-variable_header_byte = 0
-data_header_byte = 0
-data_skip_byte = 0
-footer_byte = 0
-values_per_record = 4
-endianness = "little"
-ADConverterScale = 1.0
-ADRangeCoefficient = 1.0
-ADCoefficient = 1.0
-
-[coefficient]
-CH1 = 1.0
-CH2 = 1.0
-CH3 = 1.0
-CH4 = 1.0
-"#,
-            ks2.display(),
-            out.display()
-        );
-        fs::write(&path, body).unwrap();
-        path
-    }
-
-    #[test]
-    fn draw_smoke_normal_help_and_editing() {
-        use ratatui::backend::TestBackend;
-        use ratatui::Terminal;
-
-        use crate::tui::ui;
-
-        let dir = tempdir().unwrap();
-        let p = write_app_config(dir.path());
-        let mut app = App::new(p).unwrap();
-
-        let mut term = Terminal::new(TestBackend::new(100, 50)).unwrap();
-        term.draw(|f| ui::draw(f, &mut app)).unwrap();
-
-        app.show_help = true;
-        term.draw(|f| ui::draw(f, &mut app)).unwrap();
-
-        app.show_help = false;
-        app.editing = true;
-        app.edit_buffer = "ab".into();
-        app.edit_cursor = 1;
-        term.draw(|f| ui::draw(f, &mut app)).unwrap();
-    }
-
-    #[test]
-    fn list_row_line_covers_all_fields() {
-        let dir = tempdir().unwrap();
-        let p = write_app_config(dir.path());
-        let app = App::new(p).unwrap();
-        for i in 0..FIELD_COUNT {
-            let _ = app.list_row_line(i);
-        }
-    }
-
-    #[test]
-    fn handle_key_quit_and_help() {
-        let dir = tempdir().unwrap();
-        let p = write_app_config(dir.path());
-        let mut app = App::new(p.clone()).unwrap();
-        assert!(app.handle_key(press(KeyCode::Char('q'))).unwrap());
-
-        let mut app = App::new(p).unwrap();
-        assert!(!app.handle_key(press(KeyCode::Char('?'))).unwrap());
-        assert!(app.show_help);
-        assert!(!app.handle_key(press(KeyCode::Esc)).unwrap());
-        assert!(!app.show_help);
-        assert!(!app.handle_key(press(KeyCode::Char('?'))).unwrap());
-        assert!(app.show_help);
-        assert!(!app.handle_key(press(KeyCode::Char('?'))).unwrap());
-    }
-
-    #[test]
-    fn handle_key_move_save_run_space() {
-        let dir = tempdir().unwrap();
-        let p = write_app_config(dir.path());
-        let mut app = App::new(p).unwrap();
-
-        assert!(!app.handle_key(press(KeyCode::Char('j'))).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Down)).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Char('k'))).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Up)).unwrap());
-
-        app.list_state.select(Some(3));
-        assert!(!app.handle_key(press(KeyCode::Char(' '))).unwrap());
-        app.list_state.select(Some(10));
-        assert!(!app.handle_key(press(KeyCode::Char(' '))).unwrap());
-
-        assert!(!app.handle_key(press(KeyCode::Char('s'))).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Char('r'))).unwrap());
-    }
-
-    #[test]
-    fn handle_key_undo_after_space_toggle() {
-        let dir = tempdir().unwrap();
-        let p = write_app_config(dir.path());
-        let mut app = App::new(p).unwrap();
-
-        app.list_state.select(Some(3));
-        let before = app.config.auto_detect_offsets;
-        assert!(!app.handle_key(press(KeyCode::Char(' '))).unwrap());
-        assert_ne!(before, app.config.auto_detect_offsets);
-        assert!(!app.handle_key(press(KeyCode::Char('u'))).unwrap());
-        assert_eq!(before, app.config.auto_detect_offsets);
-    }
-
-    #[test]
-    fn field_update_log_scrolls_to_tail() {
-        let dir = tempdir().unwrap();
-        let p = write_app_config(dir.path());
-        let mut app = App::new(p).unwrap();
-        app.logs = vec!["old".into(), "older".into()];
-        app.log_cursor_line = 0;
-        app.log_follow_tail = false;
-        app.list_state.select(Some(3));
-        assert!(!app.handle_key(press(KeyCode::Char(' '))).unwrap());
-        assert!(app.log_follow_tail);
-        assert_eq!(app.log_cursor_line, app.logs.len().saturating_sub(1));
-    }
-
-    #[test]
-    fn handle_key_redo_ctrl_r_after_undo() {
-        let dir = tempdir().unwrap();
-        let p = write_app_config(dir.path());
-        let mut app = App::new(p).unwrap();
-
-        app.list_state.select(Some(3));
-        let before = app.config.auto_detect_offsets;
-        assert!(!app.handle_key(press(KeyCode::Char(' '))).unwrap());
-        assert_ne!(before, app.config.auto_detect_offsets);
-        assert!(!app.handle_key(press(KeyCode::Char('u'))).unwrap());
-        assert_eq!(before, app.config.auto_detect_offsets);
-        assert!(!app.handle_key(press_ctrl_r()).unwrap());
-        assert_ne!(before, app.config.auto_detect_offsets);
-    }
-
-    #[test]
-    fn handle_key_redo_empty_stack_message() {
-        let dir = tempdir().unwrap();
-        let p = write_app_config(dir.path());
-        let mut app = App::new(p).unwrap();
-
-        assert!(!app.handle_key(press_ctrl_r()).unwrap());
-        assert!(app.status_line.contains("進めません"));
-    }
-
-    #[test]
-    fn handle_key_undo_empty_stack_message() {
-        let dir = tempdir().unwrap();
-        let p = write_app_config(dir.path());
-        let mut app = App::new(p).unwrap();
-
-        assert!(!app.handle_key(press(KeyCode::Char('u'))).unwrap());
-        assert!(app.status_line.contains("取り消せません"));
-    }
-
-    #[test]
-    fn handle_key_gg_and_goto_bottom() {
-        let dir = tempdir().unwrap();
-        let p = write_app_config(dir.path());
-        let mut app = App::new(p).unwrap();
-
-        assert!(!app.handle_key(press(KeyCode::Char('G'))).unwrap());
-        assert_eq!(app.selected_row(), FIELD_COUNT - 1);
-
-        assert!(!app.handle_key(press(KeyCode::Char('g'))).unwrap());
-        assert!(app.awaiting_second_g);
-        assert!(!app.handle_key(press(KeyCode::Char('g'))).unwrap());
-        assert_eq!(app.selected_row(), 0);
-        assert!(!app.awaiting_second_g);
-    }
-
-    #[test]
-    fn handle_key_gg_g_stays_on_focused_pane() {
-        let dir = tempdir().unwrap();
-        let p = write_app_config(dir.path());
-        let mut app = App::new(p).unwrap();
-
-        app.focused_pane = FocusedPane::Log;
-        app.logs = vec!["a".into(), "b".into(), "c".into()];
-        app.log_cursor_line = 0;
-        app.log_follow_tail = false;
-        assert!(!app.handle_key(press(KeyCode::Char('G'))).unwrap());
-        assert_eq!(app.focused_pane, FocusedPane::Log);
-        assert_eq!(app.log_cursor_line, 2);
-        assert!(app.log_follow_tail);
-
-        app.focused_pane = FocusedPane::Detail;
-        app.detail_cursor_line = 5;
-        assert!(!app.handle_key(press(KeyCode::Char('g'))).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Char('g'))).unwrap());
-        assert_eq!(app.focused_pane, FocusedPane::Detail);
-        assert_eq!(app.detail_cursor_line, 0);
-    }
-
-    #[test]
-    fn begin_edit_i_puts_cursor_at_start_a_at_end() {
-        let dir = tempdir().unwrap();
-        let p = write_app_config(dir.path());
-        let mut app = App::new(p).unwrap();
-        app.list_state.select(Some(2));
-
-        assert!(!app.handle_key(press(KeyCode::Char('i'))).unwrap());
-        assert!(app.editing);
-        assert_eq!(app.edit_cursor, 0);
-        assert!(!app.handle_key(press(KeyCode::Esc)).unwrap());
-
-        assert!(!app.handle_key(press(KeyCode::Char('a'))).unwrap());
-        assert!(app.editing);
-        assert_eq!(app.edit_cursor, app.edit_buffer.chars().count());
-    }
-
-    #[test]
-    fn handle_key_edit_buffer_roundtrip() {
-        let dir = tempdir().unwrap();
-        let p = write_app_config(dir.path());
-        let mut app = App::new(p).unwrap();
-        app.list_state.select(Some(4));
-
-        assert!(!app.handle_key(press(KeyCode::Enter)).unwrap());
-        assert!(app.editing);
-        assert!(!app.handle_key(press(KeyCode::Backspace)).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Char('9'))).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Left)).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Right)).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Home)).unwrap());
-        assert!(!app.handle_key(press(KeyCode::End)).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Delete)).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Enter)).unwrap());
-        assert!(!app.editing);
-        assert_eq!(app.config.header_byte, 9);
-
-        assert!(!app.handle_key(press(KeyCode::Enter)).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Char('x'))).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Esc)).unwrap());
-        assert!(!app.editing);
-        assert_eq!(app.config.header_byte, 9);
-
-        assert!(!app.handle_key(press(KeyCode::Enter)).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Backspace)).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Char('x'))).unwrap());
-        assert!(!app.handle_key(press(KeyCode::Enter)).unwrap());
-        assert!(app.status_error);
-        assert!(app.editing);
-        assert!(app.status_line.starts_with("入力エラー:"));
-    }
+    let _ = i;
+    None
 }

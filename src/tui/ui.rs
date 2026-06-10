@@ -1,10 +1,10 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
-use ratatui::Frame;
 
-use super::app::{field_label, App, FocusedPane, FIELD_COUNT};
+use super::app::{App, FIELD_COUNT, FocusedPane, field_label};
 
 /// マウスヒットテスト用（`draw` と同一の分割）
 #[derive(Clone, Copy)]
@@ -118,7 +118,12 @@ fn pane_title_cursor_suffix(app: &App, pane: FocusedPane, total_lines: usize) ->
 }
 
 /// 詳細・CSV 用: visual 優先、次にカーソル行の薄い背景
-fn text_pane_line(s: String, abs: usize, visual_range: Option<(usize, usize)>, cursor_line: usize) -> Line<'static> {
+fn text_pane_line(
+    s: String,
+    abs: usize,
+    visual_range: Option<(usize, usize)>,
+    cursor_line: usize,
+) -> Line<'static> {
     let in_vis = visual_range
         .map(|(lo, hi)| abs >= lo && abs <= hi)
         .unwrap_or(false);
@@ -204,7 +209,10 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(pane_border_style(FocusedPane::ConfigList, list_focus))
-                .title(format!("[{}] config.toml ", FocusedPane::ConfigList.title_prefix()))
+                .title(format!(
+                    "[{}] config.toml ",
+                    FocusedPane::ConfigList.title_prefix()
+                ))
                 .title_style(
                     Style::default()
                         .fg(Color::Cyan)
@@ -226,8 +234,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         pane_title_cursor_suffix(app, FocusedPane::Detail, detail_plain.len()),
     );
     let detail_h = lay.panes.detail.height.saturating_sub(2).max(1) as usize;
-    let detail_first =
-        scroll_first_visible(app.detail_cursor_line, detail_h, detail_plain.len());
+    let detail_first = scroll_first_visible(app.detail_cursor_line, detail_h, detail_plain.len());
     let detail_vr = app.visual_abs_range_for_pane(FocusedPane::Detail);
 
     let detail_lines: Vec<Line> = detail_plain
@@ -278,7 +285,11 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
                 .borders(Borders::ALL)
                 .border_style(pane_border_style(FocusedPane::Csv, csv_focus))
                 .title(csv_title)
-                .title_style(Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                .title_style(
+                    Style::default()
+                        .fg(Color::Blue)
+                        .add_modifier(Modifier::BOLD),
+                ),
         )
         .wrap(Wrap { trim: false });
     frame.render_widget(csv_para, lay.panes.csv);
@@ -397,9 +408,13 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from(" Home / End      編集中の行頭・行末"),
         Line::from(" Backspace       カーソル前の文字を削除"),
         Line::from(" Delete          カーソル位置の文字を削除"),
-        Line::from(" g (続けて g)    フォーカス中ペインの先頭へ（一覧=先頭項目 詳細/CSV/ログ=先頭行）"),
+        Line::from(
+            " g (続けて g)    フォーカス中ペインの先頭へ（一覧=先頭項目 詳細/CSV/ログ=先頭行）",
+        ),
         Line::from(" G               フォーカス中ペインの末尾へ（ログ末尾では新規ログに追従）"),
-        Line::from(" u               直前の変更を取り消し（編集確定・Space 切替・変換成功のたびに履歴へ積む）"),
+        Line::from(
+            " u               直前の変更を取り消し（編集確定・Space 切替・変換成功のたびに履歴へ積む）",
+        ),
         Line::from(" Ctrl+R          やり直し（u のあと。Mac/Windows とも端末の Ctrl 修飾キー）"),
         Line::from(""),
         Line::from(vec![Span::styled(
