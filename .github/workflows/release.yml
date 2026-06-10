@@ -17,11 +17,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             label: macOS Apple Silicon
             archive_suffix: apple-silicon-mac
             binary_name: ks3_parser
-          - os: macos-13
+          - os: macos-15-intel
             label: macOS Intel
             archive_suffix: intel-mac
             binary_name: ks3_parser
